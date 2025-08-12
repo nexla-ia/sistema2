@@ -633,6 +633,7 @@ export const getAllSlots = async (date: string) => {
     console.error('Error in getAllSlots:', error);
     return { data: [], error };
   }
+}
 
 export const blockSlot = async (date: string, timeSlot: string, reason?: string) => {
   const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
