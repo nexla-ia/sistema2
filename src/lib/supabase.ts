@@ -236,12 +236,7 @@ export const createBooking = async (bookingData: {
       ? `${bookingData.booking_time}:00` 
       : bookingData.booking_time;
 
-    // Usar o SALON_ID do ambiente
-    const SALON_ID = import.meta.env.VITE_SALON_ID;
-    if (!SALON_ID) {
-      console.error('SALON_ID not configured');
-      return { data: null, error: { message: 'Configuração do salão não encontrada', code: 'SALON_NOT_CONFIGURED' } };
-    }
+    const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
 
     console.log('Verificando disponibilidade do slot:', { date: bookingData.booking_date, time: timeSlot });
 
@@ -375,30 +370,22 @@ export const updateBookingStatus = async (id: string, status: Booking['status'])
 
 // Salon Hours functions
 export const getSalonHours = async () => {
-  const salonId = import.meta.env.VITE_SALON_ID;
-  if (!salonId) {
-    console.error('SALON_ID not configured');
-    return { data: [], error: { message: 'Configuração não encontrada' } };
-  }
+  const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
   
   return await supabase
     .from('working_hours')
     .select('*')
-    .eq('salon_id', salonId)
+    .eq('salon_id', SALON_ID)
     .order('day_of_week');
 }
 
 export const updateSalonHours = async (dayOfWeek: number, updates: Partial<SalonHours>) => {
-  const salonId = import.meta.env.VITE_SALON_ID;
-  if (!salonId) {
-    console.error('SALON_ID not configured');
-    return { data: null, error: { message: 'Configuração não encontrada' } };
-  }
+  const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
   
   return await supabase
     .from('working_hours')
     .update(updates)
-    .eq('salon_id', salonId)
+    .eq('salon_id', SALON_ID)
     .eq('day_of_week', dayOfWeek)
     .select('*')
     .single();
@@ -410,7 +397,7 @@ export const getAvailableSlots = async (date: string, duration: number = 30): Pr
   try {
     console.log('Fetching available slots for date:', date, 'duration:', duration);
     
-    const SALON_ID = import.meta.env.VITE_SALON_ID || '4f59cc12-91c1-44fc-b158-697b9056e0cb';
+    const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
     
     const { data: slots, error } = await supabase
       .from('slots')
@@ -421,17 +408,15 @@ export const getAvailableSlots = async (date: string, duration: number = 30): Pr
     
     if (error) {
       console.error('Error fetching slots:', error);
-      // Se não há slots no banco, gerar horários padrão
-      console.log('No slots found in database, generating default slots');
-      return { data: generateDefaultSlots(date), error: null };
+      return { data: [], error };
     }
     
     console.log('Raw slots from database:', slots);
     
-    // Se não há slots para esta data, gerar horários padrão
+    // Se não há slots para esta data, retornar array vazio
     if (!slots || slots.length === 0) {
-      console.log('No slots found for date, generating default slots');
-      return { data: generateDefaultSlots(date), error: null };
+      console.log('No slots found for date');
+      return { data: [], error: null };
     }
     
     // Transform to TimeSlot format
@@ -446,18 +431,13 @@ export const getAvailableSlots = async (date: string, duration: number = 30): Pr
     return { data: timeSlots, error: null };
   } catch (error) {
     console.error('Error in getAvailableSlots:', error);
-    // Em caso de erro, retornar horários padrão
-    return { data: generateDefaultSlots(date), error: null };
+    return { data: [], error };
   }
 }
 
 export const getAllSlots = async (date: string) => {
   try {
-    const salonId = import.meta.env.VITE_SALON_ID;
-    if (!salonId) {
-      console.error('SALON_ID not configured');
-      return { data: [], error: { message: 'Configuração não encontrada' } };
-    }
+    const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
     
     const { data: slots, error } = await supabase
       .from('slots')
@@ -471,7 +451,7 @@ export const getAllSlots = async (date: string) => {
           )
         )
       `)
-      .eq('salon_id', salonId)
+      .eq('salon_id', SALON_ID)
       .eq('date', date)
       .order('time_slot');
     
@@ -499,14 +479,10 @@ export const getAllSlots = async (date: string) => {
 }
 
 export const blockSlot = async (date: string, timeSlot: string, reason?: string) => {
-  const salonId = import.meta.env.VITE_SALON_ID;
-  if (!salonId) {
-    console.error('SALON_ID not configured');
-    return { data: null, error: { message: 'Configuração não encontrada' } };
-  }
+  const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
   
   return await supabase.rpc('block_slot', {
-    p_salon_id: salonId,
+    p_salon_id: SALON_ID,
     slot_date: date,
     slot_time: timeSlot,
     reason: reason || 'Bloqueado pelo administrador'
@@ -514,28 +490,20 @@ export const blockSlot = async (date: string, timeSlot: string, reason?: string)
 }
 
 export const unblockSlot = async (date: string, timeSlot: string) => {
-  const salonId = import.meta.env.VITE_SALON_ID;
-  if (!salonId) {
-    console.error('SALON_ID not configured');
-    return { data: null, error: { message: 'Configuração não encontrada' } };
-  }
+  const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
   
   return await supabase.rpc('unblock_slot', {
-    p_salon_id: salonId,
+    p_salon_id: SALON_ID,
     slot_date: date,
     slot_time: timeSlot
   });
 }
 
 export const generateSlotsForPeriod = async (startDate: string, endDate: string) => {
-  const salonId = import.meta.env.VITE_SALON_ID;
-  if (!salonId) {
-    console.error('SALON_ID not configured');
-    return { data: null, error: { message: 'Configuração não encontrada' } };
-  }
+  const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
   
   return await supabase.rpc('generate_slots_for_period', {
-    p_salon_id: salonId,  // ou _salon
+    p_salon_id: SALON_ID,
     start_date: startDate,
     end_date: endDate
   });

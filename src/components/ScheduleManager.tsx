@@ -105,7 +105,7 @@ const ScheduleManager = ({ salon }: ScheduleManagerProps) => {
   };
 
   const handleReloadDay = async () => {
-  const salonId = salon?.id || import.meta.env.VITE_SALON_ID;
+  const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
   const toISO = (d: Date) => d.toISOString().slice(0, 10);
   const iso =
     typeof selectedDate === 'string'
@@ -115,7 +115,7 @@ const ScheduleManager = ({ salon }: ScheduleManagerProps) => {
   try {
     // sincroniza só o dia mostrado
     await supabase.rpc('sync_slots_for_period', {
-      p_salon_id: salonId,
+      p_salon_id: SALON_ID,
       p_start: iso,
       p_end: iso,
     });
@@ -160,10 +160,10 @@ const ScheduleManager = ({ salon }: ScheduleManagerProps) => {
       end.setDate(end.getDate() + 60);     // janela de 60 dias (ajuste se quiser)
 
       const toISO = (d: Date) => d.toISOString().slice(0, 10);
-      const salonId = salon?.id || import.meta.env.VITE_SALON_ID;  // <-- fallback
+      const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
 
       await supabase.rpc('sync_slots_for_period', {
-        p_salon_id: salonId,               // <-- sempre manda um UUID válido
+        p_salon_id: SALON_ID,
         p_start: toISO(start),
         p_end: toISO(end),
       });
