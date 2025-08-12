@@ -420,9 +420,6 @@ const generateDefaultWorkingHours = (dayOfWeek: number): TimeSlot[] => {
         available: true
       });
     }
-  }
-  
-}
 // Services functions
 export const getServices = async () => {
   const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
