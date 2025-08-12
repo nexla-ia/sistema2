@@ -338,6 +338,61 @@ export const createBooking = async (bookingData: {
   }
 };
 
+// Função para inicializar working_hours se não existirem
+export const initializeWorkingHours = async () => {
+  const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
+  
+  try {
+    // Verificar se já existem working_hours
+    const { data: existing, error: checkError } = await supabase
+      .from('working_hours')
+      .select('id')
+      .eq('salon_id', SALON_ID)
+      .limit(1);
+    
+    if (checkError) {
+      console.error('Error checking working hours:', checkError);
+      return;
+    }
+    
+    // Se já existem, não fazer nada
+    if (existing && existing.length > 0) {
+      console.log('Working hours already exist');
+      return;
+    }
+    
+    console.log('Initializing working hours for salon:', SALON_ID);
+    
+    // Criar working_hours padrão para todos os dias
+    const defaultHours = [];
+    for (let day = 0; day <= 6; day++) {
+      const isOpen = day !== 0; // Domingo fechado
+      defaultHours.push({
+        salon_id: SALON_ID,
+        day_of_week: day,
+        is_open: isOpen,
+        open_time: isOpen ? '08:00' : null,
+        close_time: isOpen ? '18:00' : null,
+        break_start: isOpen ? '12:00' : null,
+        break_end: isOpen ? '13:00' : null,
+        slot_duration: 30
+      });
+    }
+    
+    const { error: insertError } = await supabase
+      .from('working_hours')
+      .insert(defaultHours);
+    
+    if (insertError) {
+      console.error('Error inserting default working hours:', insertError);
+    } else {
+      console.log('Default working hours created successfully');
+    }
+    
+  } catch (error) {
+    console.error('Error initializing working hours:', error);
+  }
+};
 // Função para gerar slots para a visão administrativa
 const generateAdminSlotsFromWorkingHours = async (date: string) => {
   try {
@@ -475,6 +530,9 @@ export const getAvailableSlots = async (date: string, duration: number = 30): Pr
     
     const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
     
+    // Inicializar working_hours se não existirem
+    await initializeWorkingHours();
+    
     console.log('Fetching slots from database...');
     const { data: slots, error } = await supabase
       .from('slots')
@@ -543,14 +601,18 @@ const generateSlotsFromWorkingHours = async (date: string): Promise<TimeSlot[]> 
     
     if (error) {
       console.error('Error fetching working hours:', error);
-      return [];
+      // Se há erro, usar horários padrão
+      console.log('Using default working hours due to error');
+      return generateDefaultWorkingHours(dayOfWeek);
     }
     
     console.log('Working hours result:', workingHours);
     
     if (!workingHours || !workingHours.is_open) {
       console.log('Salon is closed on this day. Working hours:', workingHours);
-      return [];
+      // Se não há working_hours ou está fechado, usar horários padrão
+      console.log('Using default working hours - salon appears closed or no data');
+      return generateDefaultWorkingHours(dayOfWeek);
     }
     
     console.log('Salon is open! Working hours:', {
@@ -616,10 +678,58 @@ const generateSlotsFromWorkingHours = async (date: string): Promise<TimeSlot[]> 
     
   } catch (error) {
     console.error('Error generating slots from working hours:', error);
-    return [];
+    // Em caso de erro, usar horários padrão
+    const dateObj = new Date(date + 'T12:00:00');
+    const dayOfWeek = dateObj.getDay();
+    return generateDefaultWorkingHours(dayOfWeek);
   }
 };
 export const getAllSlots = async (date: string) => {
+// Função para gerar horários padrão quando não há working_hours
+const generateDefaultWorkingHours = (dayOfWeek: number): TimeSlot[] => {
+  console.log('=== GENERATING DEFAULT WORKING HOURS ===');
+  console.log('Day of week:', dayOfWeek);
+  
+  // Domingo fechado
+  if (dayOfWeek === 0) {
+    console.log('Sunday - closed');
+    return [];
+  }
+  
+  const slots: TimeSlot[] = [];
+  const slotDuration = 30; // 30 minutos por padrão
+  
+  // Horários padrão: 8:00 às 18:00
+  const openTime = 8 * 60; // 8:00 em minutos
+  const closeTime = 18 * 60; // 18:00 em minutos
+  const breakStart = 12 * 60; // 12:00 em minutos
+  const breakEnd = 13 * 60; // 13:00 em minutos
+  
+  console.log('Default hours: 8:00-18:00, break: 12:00-13:00, slot duration: 30min');
+  
+  const minutesToTime = (minutes: number): string => {
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
+  };
+  
+  for (let currentTime = openTime; currentTime < closeTime; currentTime += slotDuration) {
+    // Pular horário de almoço
+    if (currentTime >= breakStart && currentTime < breakEnd) {
+      continue;
+    }
+    
+    const timeStr = minutesToTime(currentTime);
+    slots.push({
+      time: timeStr,
+      available: true
+    });
+  }
+  
+  console.log('Generated default slots:', slots.length, 'slots');
+  console.log('Default slots:', slots.map(s => s.time));
+  return slots;
+};
   try {
     const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
     
