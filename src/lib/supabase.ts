@@ -409,5 +409,50 @@ const generateDefaultWorkingHours = (dayOfWeek: number): TimeSlot[] => {
     console.log('Sunday - closed');
     return [];
   }
+  
+  // Segunda a sábado: 8:00 às 18:00, slots de 30 minutos
+  const slots: TimeSlot[] = [];
+  for (let hour = 8; hour < 18; hour++) {
+    for (let minute = 0; minute < 60; minute += 30) {
+      const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+      slots.push({
+        time: timeStr,
+        available: true
+      });
+    }
+  }
+  
+  console.log('Generated default slots:', slots.length);
+  return slots;
+}
+
+// Services functions
+export const getServices = async () => {
+  const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
+  
+  return await supabase
+    .from('services')
+    .select('*')
+    .eq('salon_id', SALON_ID)
+    .eq('active', true)
+    .order('name');
+}
+
+// Get all slots for admin dashboard
+export const getAllSlots = async (date: string) => {
+  const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
+  
+  return await supabase
+    .from('slots')
+    .select(`
+      *,
+      bookings:booking_id(
+        *,
+        customer:customers(*)
+      )
+    `)
+    .eq('salon_id', SALON_ID)
+    .eq('date', date)
+    .order('time_slot');
 }
   
