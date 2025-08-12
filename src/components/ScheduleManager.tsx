@@ -1,23 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Clock, Save, RefreshCw, Lock, Unlock, Plus, Users } from 'lucide-react';
+import { Calendar, Clock, Save, RefreshCw, Lock, Unlock, Plus, Users, Settings } from 'lucide-react';
 import Modal from './Modal';
 import { useModal } from '../hooks/useModal';
 import { 
-  getSalonHours, 
-  updateSalonHours, 
   getAllSlots, 
-  blockSlot, 
-  unblockSlot,
-  generateSlotsForPeriod,
   supabase,
-  type SalonHours,
   type Salon 
 } from '../lib/supabase';
 
 interface ScheduleManagerProps {
   salon: Salon | null;
-  onOpeningHoursChange?: (hours: any, showSuccess: (title: string, message: string) => void, showError: (title: string, message: string) => void) => void;
-  bookings?: Record<string, string[]>;
 }
 
 interface SlotData {
@@ -34,64 +26,42 @@ interface SlotData {
   };
 }
 
+interface DefaultSchedule {
+  open_time: string;
+  close_time: string;
+  slot_duration: number;
+  break_start?: string;
+  break_end?: string;
+}
+
 const ScheduleManager = ({ salon }: ScheduleManagerProps) => {
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [slots, setSlots] = useState<SlotData[]>([]);
-  const [salonHours, setSalonHours] = useState<SalonHours[]>([]);
   const [loadingSlot, setLoadingSlot] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [generating, setGenerating] = useState(false);
+  const [defaultSchedule, setDefaultSchedule] = useState<DefaultSchedule>({
+    open_time: '08:00',
+    close_time: '18:00',
+    slot_duration: 30,
+    break_start: '12:00',
+    break_end: '13:00'
+  });
+  const [generatePeriod, setGeneratePeriod] = useState({
+    start_date: new Date().toISOString().split('T')[0],
+    end_date: (() => {
+      const date = new Date();
+      date.setMonth(date.getMonth() + 1);
+      return date.toISOString().split('T')[0];
+    })()
+  });
+
   const { modal, hideModal, showSuccess, showError } = useModal();
-
-  const dayNames = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
-
-  useEffect(() => {
-    loadSalonHours();
-  }, []);
 
   useEffect(() => {
     loadSlots();
+    setLoading(false);
   }, [selectedDate]);
-
-  const loadSalonHours = async () => {
-    try {
-      const { data, error } = await getSalonHours();
-      if (error) throw error;
-      
-      // If no working hours exist, create default structure
-      if (!data || data.length === 0) {
-        // Create default working hours (all days closed)
-        const defaultHours = [];
-        for (let day = 0; day <= 6; day++) {
-          const { data: newHour, error: createError } = await supabase
-            .from('working_hours')
-            .insert({
-              salon_id: salon?.id,
-              day_of_week: day,
-              is_open: false,
-              open_time: null,
-              close_time: null,
-              break_start: null,
-              break_end: null,
-              slot_duration: 30
-            })
-            .select()
-            .single();
-          
-          if (!createError && newHour) {
-            defaultHours.push(newHour);
-          }
-        }
-        setSalonHours(defaultHours);
-      } else {
-        setSalonHours(data);
-      }
-    } catch (error) {
-      console.error('Error loading salon hours:', error);
-      showError('Erro', 'Erro ao carregar horários de funcionamento');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const loadSlots = async () => {
     try {
@@ -104,124 +74,84 @@ const ScheduleManager = ({ salon }: ScheduleManagerProps) => {
     }
   };
 
-  const handleReloadDay = async () => {
-  const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
-  const toISO = (d: Date) => d.toISOString().slice(0, 10);
-  const iso =
-    typeof selectedDate === 'string'
-      ? selectedDate
-      : toISO(new Date(selectedDate));
-
-  try {
-    // sincroniza só o dia mostrado
-    await supabase.rpc('sync_slots_for_period', {
-      p_salon_id: SALON_ID,
-      p_start: iso,
-      p_end: iso,
-    });
-
-    await loadSlots(); // recarrega a lista para o dia atual
-    showSuccess('Pronto!', 'Horários sincronizados para o dia selecionado.');
-  } catch (err) {
-    console.error('reload error', err);
-    showError('Erro', 'Não foi possível recarregar os horários.');
-  }
-};
-
-
-  const handleUpdateSalonHours = async (dayOfWeek: number, field: string, value: any) => {
+  const generateSlots = async () => {
+    setGenerating(true);
     try {
-      const currentHours = salonHours.find(h => h.day_of_week === dayOfWeek);
-      if (!currentHours) return;
-
-      const updates = { [field]: value };
+      const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
       
-      // Se está fechando o dia, limpar horários
-      if (field === 'is_open' && !value) {
-        updates.open_time = null;
-        updates.close_time = null;
-        updates.break_start = null;
-        updates.break_end = null;
-      }
+      // Chamar função RPC para gerar slots
+      const { error } = await supabase.rpc('generate_slots_for_period', {
+        p_salon_id: SALON_ID,
+        p_start_date: generatePeriod.start_date,
+        p_end_date: generatePeriod.end_date,
+        p_open_time: defaultSchedule.open_time,
+        p_close_time: defaultSchedule.close_time,
+        p_slot_duration: defaultSchedule.slot_duration,
+        p_break_start: defaultSchedule.break_start || null,
+        p_break_end: defaultSchedule.break_end || null
+      });
 
-      const { data, error } = await updateSalonHours(dayOfWeek, updates);
       if (error) throw error;
 
-      // Atualizar estado local
-      setSalonHours(prev => prev.map(h => 
-        h.day_of_week === dayOfWeek ? { ...h, ...updates } : h
-      ));
-
-      showSuccess('Sucesso!', 'Horário atualizado com sucesso!');
-      
-      // ====== NOVO: sincroniza TODO o período com base no working_hours ======
-      const start = new Date();            // hoje
-      const end   = new Date();
-      end.setDate(end.getDate() + 60);     // janela de 60 dias (ajuste se quiser)
-
-      const toISO = (d: Date) => d.toISOString().slice(0, 10);
-      const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
-
-      await supabase.rpc('sync_slots_for_period', {
-        p_salon_id: SALON_ID,
-        p_start: toISO(start),
-        p_end: toISO(end),
-      });
-    // ================================================================
-
-    await loadSlots(); // recarrega a data selecionada
-  } catch (error) {
-    console.error('Error updating salon hours:', error);
-    showError('Erro', 'Erro ao atualizar horário');
-  }
-};
+      await loadSlots();
+      showSuccess(
+        'Horários Gerados!', 
+        `Slots criados de ${generatePeriod.start_date} até ${generatePeriod.end_date} com sucesso!`
+      );
+    } catch (error: any) {
+      console.error('Error generating slots:', error);
+      showError('Erro', error.message || 'Erro ao gerar horários');
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   const handleBlockSlot = async (slotTime: string) => {
-  try {
-    setLoadingSlot(slotTime);
-    const iso = typeof selectedDate === 'string'
-      ? selectedDate
-      : new Date(selectedDate).toISOString().slice(0,10);
+    try {
+      setLoadingSlot(slotTime);
+      const iso = typeof selectedDate === 'string'
+        ? selectedDate
+        : new Date(selectedDate).toISOString().slice(0,10);
 
-    const { error } = await supabase.rpc('block_slot_by_user', {
-      p_date: iso,
-      p_time: slotTime,
-      p_reason: 'Bloqueado manualmente'
-    });
-    if (error) throw error;
+      const { error } = await supabase.rpc('block_slot_by_user', {
+        p_date: iso,
+        p_time: slotTime,
+        p_reason: 'Bloqueado manualmente'
+      });
+      if (error) throw error;
 
-    await loadSlots();
-    showSuccess('Bloqueado', `Horário ${slotTime} bloqueado.`);
-  } catch (e: any) {
-    console.error('block error', e);
-    showError('Erro', e?.message || 'Não foi possível bloquear o horário');
-  } finally {
-    setLoadingSlot(null);
-  }
-};
+      await loadSlots();
+      showSuccess('Bloqueado', `Horário ${slotTime} bloqueado.`);
+    } catch (e: any) {
+      console.error('block error', e);
+      showError('Erro', e?.message || 'Não foi possível bloquear o horário');
+    } finally {
+      setLoadingSlot(null);
+    }
+  };
 
   const handleUnblockSlot = async (slotTime: string) => {
-  try {
-    setLoadingSlot(slotTime);
-    const iso = typeof selectedDate === 'string'
-      ? selectedDate
-      : new Date(selectedDate).toISOString().slice(0,10);
+    try {
+      setLoadingSlot(slotTime);
+      const iso = typeof selectedDate === 'string'
+        ? selectedDate
+        : new Date(selectedDate).toISOString().slice(0,10);
 
-    const { error } = await supabase.rpc('unblock_slot_by_user', {
-      p_date: iso,
-      p_time: slotTime
-    });
-    if (error) throw error;
+      const { error } = await supabase.rpc('unblock_slot_by_user', {
+        p_date: iso,
+        p_time: slotTime
+      });
+      if (error) throw error;
 
-    await loadSlots();
-    showSuccess('Desbloqueado', `Horário ${slotTime} liberado.`);
-  } catch (e: any) {
-    console.error('unblock error', e);
-    showError('Erro', e?.message || 'Não foi possível desbloquear o horário');
-  } finally {
-    setLoadingSlot(null);
-  }
-};
+      await loadSlots();
+      showSuccess('Desbloqueado', `Horário ${slotTime} liberado.`);
+    } catch (e: any) {
+      console.error('unblock error', e);
+      showError('Erro', e?.message || 'Não foi possível desbloquear o horário');
+    } finally {
+      setLoadingSlot(null);
+    }
+  };
 
   const getSlotColor = (status: string, isLoading: boolean = false) => {
     if (isLoading) return 'bg-gray-100 text-gray-600 border-gray-300 opacity-50';
@@ -252,93 +182,138 @@ const ScheduleManager = ({ salon }: ScheduleManagerProps) => {
 
   return (
     <div className="space-y-8">
-      {/* Configuração de Horários de Funcionamento */}
+      {/* Configuração de Horário Padrão */}
       <div className="bg-white rounded-xl shadow-sm p-6">
         <div className="flex items-center justify-between mb-6">
-          <h3 className="text-lg font-semibold text-gray-900">Horários de Funcionamento</h3>
-          <div className="text-sm text-gray-500">
-            Configure os dias e horários que o estabelecimento funciona
-          </div>
+          <h3 className="text-lg font-semibold text-gray-900 flex items-center">
+            <Settings className="w-5 h-5 mr-2 text-clinic-500" />
+            Configuração de Horário Padrão
+          </h3>
         </div>
         
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {salonHours.map((hours) => (
-            <div key={hours.day_of_week} className="border border-gray-200 rounded-lg p-4">
-              <div className="flex items-center justify-between mb-4">
-                <h4 className="font-medium text-gray-900">
-                  {dayNames[hours.day_of_week]}
-                </h4>
-                <label className="flex items-center">
-                  <input
-                    type="checkbox"
-                    checked={hours.is_open}
-                    onChange={(e) => handleUpdateSalonHours(hours.day_of_week, 'is_open', e.target.checked)}
-                    className="rounded border-gray-300 text-clinic-600 focus:ring-clinic-500"
-                  />
-                  <span className="ml-2 text-sm text-gray-700">Aberto</span>
-                </label>
-              </div>
-              
-              {hours.is_open && (
-                <div className="space-y-3">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs text-gray-600 mb-1">Abertura</label>
-                      <input
-                        type="time"
-                        value={hours.open_time || ''}
-                        onChange={(e) => handleUpdateSalonHours(hours.day_of_week, 'open_time', e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-clinic-500 focus:border-transparent"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs text-gray-600 mb-1">Fechamento</label>
-                      <input
-                        type="time"
-                        value={hours.close_time || ''}
-                        onChange={(e) => handleUpdateSalonHours(hours.day_of_week, 'close_time', e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-clinic-500 focus:border-transparent"
-                      />
-                    </div>
-                  </div>
-                  
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs text-gray-600 mb-1">Início Intervalo</label>
-                      <input
-                        type="time"
-                        value={hours.break_start || ''}
-                        onChange={(e) => handleUpdateSalonHours(hours.day_of_week, 'break_start', e.target.value || null)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-clinic-500 focus:border-transparent"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs text-gray-600 mb-1">Fim Intervalo</label>
-                      <input
-                        type="time"
-                        value={hours.break_end || ''}
-                        onChange={(e) => handleUpdateSalonHours(hours.day_of_week, 'break_end', e.target.value || null)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-clinic-500 focus:border-transparent"
-                      />
-                    </div>
-                  </div>
-                  
-                  <div>
-                    <label className="block text-xs text-gray-600 mb-1">Duração do Slot (minutos)</label>
-                    <select
-                      value={hours.slot_duration}
-                      onChange={(e) => handleUpdateSalonHours(hours.day_of_week, 'slot_duration', parseInt(e.target.value))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-clinic-500 focus:border-transparent"
-                    >
-                      <option value={15}>15 minutos</option>
-                      <option value={30}>30 minutos</option>
-                      <option value={60}>60 minutos</option>
-                    </select>
-                  </div>
-                </div>
-              )}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Horário de Abertura
+            </label>
+            <input
+              type="time"
+              value={defaultSchedule.open_time}
+              onChange={(e) => setDefaultSchedule(prev => ({ ...prev, open_time: e.target.value }))}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-clinic-500 focus:border-transparent"
+            />
+          </div>
+          
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Horário de Fechamento
+            </label>
+            <input
+              type="time"
+              value={defaultSchedule.close_time}
+              onChange={(e) => setDefaultSchedule(prev => ({ ...prev, close_time: e.target.value }))}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-clinic-500 focus:border-transparent"
+            />
+          </div>
+          
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Duração do Slot (minutos)
+            </label>
+            <select
+              value={defaultSchedule.slot_duration}
+              onChange={(e) => setDefaultSchedule(prev => ({ ...prev, slot_duration: parseInt(e.target.value) }))}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-clinic-500 focus:border-transparent"
+            >
+              <option value={15}>15 minutos</option>
+              <option value={30}>30 minutos</option>
+              <option value={60}>60 minutos</option>
+            </select>
+          </div>
+          
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Início do Intervalo (opcional)
+            </label>
+            <input
+              type="time"
+              value={defaultSchedule.break_start || ''}
+              onChange={(e) => setDefaultSchedule(prev => ({ ...prev, break_start: e.target.value || undefined }))}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-clinic-500 focus:border-transparent"
+            />
+          </div>
+          
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Fim do Intervalo (opcional)
+            </label>
+            <input
+              type="time"
+              value={defaultSchedule.break_end || ''}
+              onChange={(e) => setDefaultSchedule(prev => ({ ...prev, break_end: e.target.value || undefined }))}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-clinic-500 focus:border-transparent"
+            />
+          </div>
+        </div>
+
+        {/* Período de Geração */}
+        <div className="border-t pt-6">
+          <h4 className="text-md font-semibold text-gray-900 mb-4">Gerar Horários para Período</h4>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Data Inicial
+              </label>
+              <input
+                type="date"
+                value={generatePeriod.start_date}
+                onChange={(e) => setGeneratePeriod(prev => ({ ...prev, start_date: e.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-clinic-500 focus:border-transparent"
+              />
             </div>
-          ))}
+            
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Data Final
+              </label>
+              <input
+                type="date"
+                value={generatePeriod.end_date}
+                onChange={(e) => setGeneratePeriod(prev => ({ ...prev, end_date: e.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-clinic-500 focus:border-transparent"
+              />
+            </div>
+            
+            <div>
+              <button
+                onClick={generateSlots}
+                disabled={generating}
+                className="w-full bg-gradient-to-r from-clinic-500 to-clinic-600 text-white px-6 py-2 rounded-lg font-semibold hover:from-clinic-600 hover:to-clinic-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-300 flex items-center justify-center"
+              >
+                {generating ? (
+                  <>
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                    Gerando...
+                  </>
+                ) : (
+                  <>
+                    <Plus className="w-5 h-5 mr-2" />
+                    Gerar Horários
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+          
+          <div className="mt-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
+            <p className="text-sm text-blue-800">
+              <strong>Preview:</strong> Será gerado de {defaultSchedule.open_time} às {defaultSchedule.close_time}, 
+              slots de {defaultSchedule.slot_duration}min
+              {defaultSchedule.break_start && defaultSchedule.break_end && 
+                `, com intervalo de ${defaultSchedule.break_start} às ${defaultSchedule.break_end}`
+              }
+            </p>
+          </div>
         </div>
       </div>
 
@@ -356,13 +331,6 @@ const ScheduleManager = ({ salon }: ScheduleManagerProps) => {
                 className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-clinic-500 focus:border-transparent"
               />
             </div>
-            <button
-              onClick={handleReloadDay}
-              className="bg-gray-500 text-white px-4 py-2 rounded-lg hover:bg-gray-600 transition-colors flex items-center space-x-2"
-            >
-              <RefreshCw className="w-4 h-4" />
-              <span>Recarregar</span>
-            </button>
           </div>
         </div>
 
@@ -491,7 +459,8 @@ const ScheduleManager = ({ salon }: ScheduleManagerProps) => {
         ) : (
           <div className="text-center py-8">
             <Clock className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-            <p className="text-gray-500">Estabelecimento fechado neste dia</p>
+            <p className="text-gray-500 mb-2">Nenhum horário encontrado para esta data</p>
+            <p className="text-sm text-gray-400">Use o botão "Gerar Horários" acima para criar slots</p>
           </div>
         )}
       </div>
