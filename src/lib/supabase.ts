@@ -445,6 +445,7 @@ export const getAvailableSlots = async (date: string, duration: number = 30): Pr
     console.error('Error in getAvailableSlots:', error);
     return { data: [], error };
   }
+}
 
 export const getAllSlots = async (date: string) => {
   try {
@@ -491,6 +492,7 @@ export const getAllSlots = async (date: string) => {
     console.error('Error in getAllSlots:', error);
     return { data: [], error };
   }
+}
 
 export const blockSlot = async (date: string, timeSlot: string, reason?: string) => {
   const salonId = import.meta.env.VITE_SALON_ID;
