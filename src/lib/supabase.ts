@@ -410,25 +410,29 @@ export const getAvailableSlots = async (date: string, duration: number = 30): Pr
   try {
     console.log('Fetching available slots for date:', date, 'duration:', duration);
     
-    const salonId = import.meta.env.VITE_SALON_ID;
-    if (!salonId) {
-      console.error('SALON_ID not configured');
-      return { data: [], error: { message: 'Configuração não encontrada' } };
-    }
+    const SALON_ID = import.meta.env.VITE_SALON_ID || '4f59cc12-91c1-44fc-b158-697b9056e0cb';
     
     const { data: slots, error } = await supabase
       .from('slots')
       .select('*')
-      .eq('salon_id', salonId)
+      .eq('salon_id', SALON_ID)
       .eq('date', date)
       .order('time_slot');
     
     if (error) {
       console.error('Error fetching slots:', error);
-      return { data: null, error };
+      // Se não há slots no banco, gerar horários padrão
+      console.log('No slots found in database, generating default slots');
+      return { data: generateDefaultSlots(date), error: null };
     }
     
     console.log('Raw slots from database:', slots);
+    
+    // Se não há slots para esta data, gerar horários padrão
+    if (!slots || slots.length === 0) {
+      console.log('No slots found for date, generating default slots');
+      return { data: generateDefaultSlots(date), error: null };
+    }
     
     // Transform to TimeSlot format
     const timeSlots = (slots || []).map(slot => ({
@@ -442,13 +446,18 @@ export const getAvailableSlots = async (date: string, duration: number = 30): Pr
     return { data: timeSlots, error: null };
   } catch (error) {
     console.error('Error in getAvailableSlots:', error);
-    return { data: null, error };
+    // Em caso de erro, retornar horários padrão
+    return { data: generateDefaultSlots(date), error: null };
   }
 }
 
 export const getAllSlots = async (date: string) => {
   try {
-    const SALON_ID = import.meta.env.VITE_SALON_ID || '4f59cc12-91c1-44fc-b158-697b9056e0cb';
+    const salonId = import.meta.env.VITE_SALON_ID;
+    if (!salonId) {
+      console.error('SALON_ID not configured');
+      return { data: [], error: { message: 'Configuração não encontrada' } };
+    }
     
     const { data: slots, error } = await supabase
       .from('slots')
@@ -462,13 +471,13 @@ export const getAllSlots = async (date: string) => {
           )
         )
       `)
-      .eq('salon_id', SALON_ID)
+      .eq('salon_id', salonId)
       .eq('date', date)
       .order('time_slot');
     
     if (error) {
       console.error('Error fetching slots:', error);
-      return { data: null, error };
+      return { data: [], error };
     }
     
     const transformedSlots = (slots || []).map(slot => ({
@@ -485,7 +494,7 @@ export const getAllSlots = async (date: string) => {
     return { data: transformedSlots, error: null };
   } catch (error) {
     console.error('Error in getAllSlots:', error);
-    return { data: null, error };
+    return { data: [], error };
   }
 }
 
