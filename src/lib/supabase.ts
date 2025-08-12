@@ -398,6 +398,7 @@ const generateSlotsFromWorkingHours = async (date: string): Promise<TimeSlot[]> 
   }
 };
 export const getAllSlots = async (date: string) => {
+}
 // Função para gerar horários padrão quando não há working_hours
 const generateDefaultWorkingHours = (dayOfWeek: number): TimeSlot[] => {
   console.log('=== GENERATING DEFAULT WORKING HOURS ===');
