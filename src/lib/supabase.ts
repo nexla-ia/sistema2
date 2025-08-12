@@ -467,10 +467,15 @@ export const updateSalonHours = async (dayOfWeek: number, updates: Partial<Salon
 // Slots functions
 export const getAvailableSlots = async (date: string, duration: number = 30): Promise<{ data: TimeSlot[] | null; error: any }> => {
   try {
+    console.log('=== DEBUG getAvailableSlots ===');
+    console.log('Date:', date);
+    console.log('Duration:', duration);
+    
     console.log('Fetching available slots for date:', date, 'duration:', duration);
     
     const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
     
+    console.log('Fetching slots from database...');
     const { data: slots, error } = await supabase
       .from('slots')
       .select('*')
@@ -483,12 +488,17 @@ export const getAvailableSlots = async (date: string, duration: number = 30): Pr
       return { data: [], error };
     }
     
+    console.log('Slots from database:', slots);
+    console.log('Number of slots found:', slots?.length || 0);
+    
     console.log('Raw slots from database:', slots);
     
     // Se não há slots para esta data, gerar baseado em working_hours
     if (!slots || slots.length === 0) {
       console.log('No slots found for date, generating from working_hours');
       const generatedSlots = await generateSlotsFromWorkingHours(date);
+      console.log('Generated slots:', generatedSlots);
+      console.log('Number of generated slots:', generatedSlots.length);
       return { data: generatedSlots, error: null };
     }
     
@@ -498,8 +508,8 @@ export const getAvailableSlots = async (date: string, duration: number = 30): Pr
       available: slot.status === 'available'
     }));
     
+    console.log('Transformed time slots:', timeSlots);
     console.log('Available slots found:', timeSlots.filter(s => s.available).length);
-    console.log('All time slots:', timeSlots);
     
     return { data: timeSlots, error: null };
   } catch (error) {
@@ -511,15 +521,19 @@ export const getAvailableSlots = async (date: string, duration: number = 30): Pr
 // Função para gerar slots baseado nos horários de funcionamento
 const generateSlotsFromWorkingHours = async (date: string): Promise<TimeSlot[]> => {
   try {
+    console.log('=== DEBUG generateSlotsFromWorkingHours ===');
+    console.log('Input date:', date);
+    
     const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
     
     // Obter o dia da semana (0 = domingo, 1 = segunda, etc.)
     const dateObj = new Date(date + 'T12:00:00');
     const dayOfWeek = dateObj.getDay();
     
-    console.log('Generating slots for day of week:', dayOfWeek);
+    console.log('Day of week:', dayOfWeek, '(0=Sunday, 1=Monday, etc.)');
     
     // Buscar horários de funcionamento para este dia
+    console.log('Fetching working hours for salon:', SALON_ID, 'day:', dayOfWeek);
     const { data: workingHours, error } = await supabase
       .from('working_hours')
       .select('*')
@@ -532,15 +546,24 @@ const generateSlotsFromWorkingHours = async (date: string): Promise<TimeSlot[]> 
       return [];
     }
     
+    console.log('Working hours result:', workingHours);
+    
     if (!workingHours || !workingHours.is_open) {
-      console.log('Salon is closed on this day');
+      console.log('Salon is closed on this day. Working hours:', workingHours);
       return [];
     }
     
-    console.log('Working hours found:', workingHours);
+    console.log('Salon is open! Working hours:', {
+      open_time: workingHours.open_time,
+      close_time: workingHours.close_time,
+      break_start: workingHours.break_start,
+      break_end: workingHours.break_end,
+      slot_duration: workingHours.slot_duration
+    });
     
     const slots: TimeSlot[] = [];
     const slotDuration = workingHours.slot_duration || 30;
+    console.log('Using slot duration:', slotDuration, 'minutes');
     
     // Converter horários para minutos para facilitar cálculos
     const timeToMinutes = (timeStr: string): number => {
@@ -559,25 +582,36 @@ const generateSlotsFromWorkingHours = async (date: string): Promise<TimeSlot[]> 
     const breakStart = workingHours.break_start ? timeToMinutes(workingHours.break_start) : null;
     const breakEnd = workingHours.break_end ? timeToMinutes(workingHours.break_end) : null;
     
+    console.log('Time calculations:', {
+      openTime: openTime + ' minutes (' + workingHours.open_time + ')',
+      closeTime: closeTime + ' minutes (' + workingHours.close_time + ')',
+      breakStart: breakStart ? breakStart + ' minutes (' + workingHours.break_start + ')' : 'none',
+      breakEnd: breakEnd ? breakEnd + ' minutes (' + workingHours.break_end + ')' : 'none'
+    });
+    
     // Gerar slots do horário de abertura até o fechamento
+    console.log('Generating slots from', openTime, 'to', closeTime, 'with', slotDuration, 'minute intervals');
     for (let currentTime = openTime; currentTime < closeTime; currentTime += slotDuration) {
       // Pular horário de intervalo se definido
       if (breakStart && breakEnd && currentTime >= breakStart && currentTime < breakEnd) {
+        console.log('Skipping break time:', minutesToTime(currentTime));
         continue;
       }
       
       const timeStr = minutesToTime(currentTime);
+      console.log('Adding slot:', timeStr);
       
       // Simular alguns slots como indisponíveis (30% de chance)
       const available = Math.random() > 0.3;
       
       slots.push({
         time: timeStr,
-        available
+        available: true // Todos disponíveis por padrão
       });
     }
     
-    console.log('Generated slots:', slots);
+    console.log('Final generated slots:', slots.length, 'slots');
+    console.log('Slots list:', slots.map(s => s.time + ' (' + (s.available ? 'available' : 'unavailable') + ')'));
     return slots;
     
   } catch (error) {
