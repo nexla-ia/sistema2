@@ -116,6 +116,109 @@ export interface TimeSlot {
 export const signIn = async (email: string, password: string) => {
   return await supabase.auth.signInWithPassword({ email, password })
 }
+
+// Create booking function
+export const createBooking = async (bookingData: {
+  customerName: string
+  customerPhone: string
+  customerEmail?: string
+  bookingDate: string
+  bookingTime: string
+  serviceIds: string[]
+  notes?: string
+}) => {
+  try {
+    const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb'
+    
+    // First, find or create customer
+    let { data: customer, error: customerError } = await supabase
+      .from('customers')
+      .select('*')
+      .eq('phone', bookingData.customerPhone)
+      .maybeSingle()
+    
+    if (customerError && customerError.code !== 'PGRST116') {
+      return { data: null, error: customerError }
+    }
+    
+    // Create customer if doesn't exist
+    if (!customer) {
+      const { data: newCustomer, error: createCustomerError } = await supabase
+        .from('customers')
+        .insert({
+          name: bookingData.customerName,
+          phone: bookingData.customerPhone,
+          email: bookingData.customerEmail
+        })
+        .select('*')
+        .single()
+      
+      if (createCustomerError) {
+        return { data: null, error: createCustomerError }
+      }
+      
+      customer = newCustomer
+    }
+    
+    // Get services to calculate total price and duration
+    const { data: services, error: servicesError } = await supabase
+      .from('services')
+      .select('*')
+      .in('id', bookingData.serviceIds)
+    
+    if (servicesError) {
+      return { data: null, error: servicesError }
+    }
+    
+    if (!services || services.length === 0) {
+      return { data: null, error: { message: 'No services found' } }
+    }
+    
+    const totalPrice = services.reduce((sum, service) => sum + Number(service.price), 0)
+    const totalDuration = services.reduce((sum, service) => sum + service.duration_minutes, 0)
+    
+    // Create booking
+    const { data: booking, error: bookingError } = await supabase
+      .from('bookings')
+      .insert({
+        salon_id: SALON_ID,
+        customer_id: customer.id,
+        booking_date: bookingData.bookingDate,
+        booking_time: bookingData.bookingTime,
+        status: 'pending',
+        total_price: totalPrice,
+        total_duration_minutes: totalDuration,
+        notes: bookingData.notes
+      })
+      .select('*')
+      .single()
+    
+    if (bookingError) {
+      return { data: null, error: bookingError }
+    }
+    
+    // Create booking services
+    const bookingServices = services.map(service => ({
+      booking_id: booking.id,
+      service_id: service.id,
+      price: Number(service.price)
+    }))
+    
+    const { error: bookingServicesError } = await supabase
+      .from('booking_services')
+      .insert(bookingServices)
+    
+    if (bookingServicesError) {
+      return { data: null, error: bookingServicesError }
+    }
+    
+    return { data: booking, error: null }
+    
+  } catch (error) {
+    return { data: null, error }
+  }
+}
+
 // Função para gerar slots para a visão administrativa
 const generateAdminSlotsFromWorkingHours = async (date: string) => {
   try {
