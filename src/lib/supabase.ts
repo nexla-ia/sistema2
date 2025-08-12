@@ -231,45 +231,21 @@ export const createBooking = async (bookingData: {
   try {
     console.log('=== CREATING BOOKING ===', bookingData);
 
-    // 0) normaliza HH:mm -> HH:mm:ss (coluna time exige segundos)
-    const time =
-      bookingData.booking_time.length === 5
-        ? `${bookingData.booking_time}:00`
-        : bookingData.booking_time;
+    // Normalizar o horário para o formato correto
+    const timeSlot = bookingData.booking_time.length === 5 
+      ? `${bookingData.booking_time}:00` 
+      : bookingData.booking_time;
 
-    // 1) pega o salão (ou use a env se preferir)
-    const { data: salonRow, error: salonErr } = await supabase
-      .from('salons')
-      .select('id')
-      .limit(1)
-      .single();
-
-    if (salonErr || !salonRow) {
-      console.error('Salon not found:', salonErr);
-      return { data: null, error: { message: 'Salão não encontrado', code: 'SALON_NOT_FOUND' } };
-    }
-    const SALON_ID = salonRow.id;
-
-    // 2) garante que o slot existe E está disponível
-    const { data: slotRow, error: slotErr } = await supabase
-      .from('slots')
-      .select('id, status, booking_id')
-      .eq('salon_id', SALON_ID)
-      .eq('date', bookingData.booking_date)
-      .eq('time_slot', time)
-      .maybeSingle(); // retorna null se não existir
-
-    if (slotErr) {
-      console.error('Erro ao buscar slot:', slotErr);
-      return { data: null, error: { message: 'Erro ao verificar horário', code: 'SLOT_ERROR' } };
+    // Usar o SALON_ID do ambiente
+    const SALON_ID = import.meta.env.VITE_SALON_ID;
+    if (!SALON_ID) {
+      console.error('SALON_ID not configured');
+      return { data: null, error: { message: 'Configuração do salão não encontrada', code: 'SALON_NOT_CONFIGURED' } };
     }
 
-    // Se não existe slot, ou já não está available, barra
-    if (!slotRow || slotRow.status !== 'available' || slotRow.booking_id !== null) {
-      return { data: null, error: { message: 'Horário indisponível', code: 'SLOT_UNAVAILABLE' } };
-    }
+    console.log('Verificando disponibilidade do slot:', { date: bookingData.booking_date, time: timeSlot });
 
-    // 3) cria/recupera cliente
+    // Criar/recuperar cliente primeiro
     let customerId: string;
     const { data: existingCustomer, error: customerSearchError } = await supabase
       .from('customers')
@@ -284,6 +260,7 @@ export const createBooking = async (bookingData: {
 
     if (existingCustomer) {
       customerId = existingCustomer.id;
+      console.log('Cliente existente encontrado:', customerId);
     } else {
       const { data: newCustomer, error: customerError } = await supabase
         .from('customers')
@@ -300,67 +277,61 @@ export const createBooking = async (bookingData: {
         return { data: null, error: { message: 'Erro ao criar cliente', code: 'CUSTOMER_ERROR' } };
       }
       customerId = newCustomer.id;
+      console.log('Novo cliente criado:', customerId);
     }
 
-    // 4) cria o booking
+    // Criar o agendamento
+    console.log('Criando agendamento com dados:', {
+      salon_id: SALON_ID,
+      customer_id: customerId,
+      booking_date: bookingData.booking_date,
+      booking_time: timeSlot,
+      total_price: bookingData.total_price,
+      total_duration_minutes: bookingData.total_duration_minutes,
+      notes: bookingData.notes,
+      status: 'confirmed'
+    });
+
     const { data: booking, error: bookingError } = await supabase
       .from('bookings')
       .insert([{
         salon_id: SALON_ID,
         customer_id: customerId,
-        booking_date: bookingData.booking_date,  // 'YYYY-MM-DD'
-        booking_time: time,                      // 'HH:MM:SS'
+        booking_date: bookingData.booking_date,
+        booking_time: timeSlot,
         total_price: bookingData.total_price,
         total_duration_minutes: bookingData.total_duration_minutes,
-        notes: bookingData.notes ?? null,
-        status: 'confirmed',
+        notes: bookingData.notes || null,
+        status: 'confirmed'
       }])
       .select('id')
       .single();
 
     if (bookingError || !booking) {
       console.error('Error creating booking:', bookingError);
-      if ((bookingError as any)?.code === '23505') {
-        return { data: null, error: { message: 'Horário já reservado. Escolha outro.', code: 'DUPLICATE_BOOKING' } };
-      }
       return { data: null, error: { message: 'Erro ao criar agendamento', code: 'BOOKING_ERROR' } };
     }
     
-    console.log('RESERVANDO SLOT', { slotId: slotRow.id, bookingId: booking.id });
+    console.log('Agendamento criado com sucesso:', booking.id);
 
-
-    // 5) reserva o slot (apenas UM UPDATE, sem inserir slot)
-    const { error: slotUpdErr } = await supabase
-      .from('slots')
-      .update({
-        status: 'booked',
-        booking_id: booking.id,
-        blocked_reason: null, // obedece o CHECK
-      })
-      .eq('id', slotRow.id)          // atualiza o slot encontrado
-      .eq('status', 'available')     // só se ainda estiver livre
-      .is('booking_id', null)
-      .select('id')                  // força validação no PostgREST
-      .single();
-
-    if (slotUpdErr) {
-      console.error('Error reserving slot:', slotUpdErr);
-      // opcional: rollback do booking
-      await supabase.from('bookings').delete().eq('id', booking.id);
-      return { data: null, error: { message: 'Falha ao reservar horário', code: 'SLOT_WRITE_ERROR' } };
-    }
-
-    // 6) adiciona serviços (se falhar, não atrapalha o booking)
+    // Adicionar serviços ao agendamento
     if (bookingData.services?.length) {
       const bookingServices = bookingData.services.map(s => ({
         booking_id: booking.id,
         service_id: s.service_id,
-        price: s.price,
+        price: s.price
       }));
+      
+      console.log('Adicionando serviços:', bookingServices);
+      
       const { error: servicesError } = await supabase
         .from('booking_services')
         .insert(bookingServices);
-      if (servicesError) console.error('Error adding services:', servicesError);
+        
+      if (servicesError) {
+        console.error('Error adding services:', servicesError);
+        // Não falha o agendamento por causa dos serviços
+      }
     }
 
     console.log('=== BOOKING CREATED SUCCESSFULLY ===');
@@ -404,7 +375,12 @@ export const updateBookingStatus = async (id: string, status: Booking['status'])
 
 // Salon Hours functions
 export const getSalonHours = async () => {
-  const salonId = await getSalonId();
+  const salonId = import.meta.env.VITE_SALON_ID;
+  if (!salonId) {
+    console.error('SALON_ID not configured');
+    return { data: [], error: { message: 'Configuração não encontrada' } };
+  }
+  
   return await supabase
     .from('working_hours')
     .select('*')
@@ -413,7 +389,12 @@ export const getSalonHours = async () => {
 }
 
 export const updateSalonHours = async (dayOfWeek: number, updates: Partial<SalonHours>) => {
-  const salonId = await getSalonId();
+  const salonId = import.meta.env.VITE_SALON_ID;
+  if (!salonId) {
+    console.error('SALON_ID not configured');
+    return { data: null, error: { message: 'Configuração não encontrada' } };
+  }
+  
   return await supabase
     .from('working_hours')
     .update(updates)
@@ -424,17 +405,18 @@ export const updateSalonHours = async (dayOfWeek: number, updates: Partial<Salon
 }
 
 
-const getSalonId = async () => {
-  const { data } = await supabase.from('salons').select('id').limit(1).single();
-  return data?.id as string;
-};
 // Slots functions
 export const getAvailableSlots = async (date: string, duration: number = 30): Promise<{ data: TimeSlot[] | null; error: any }> => {
   try {
     console.log('Fetching available slots for date:', date, 'duration:', duration);
     
-    // Get all slots for the date
-    const salonId = await getSalonId();
+    // Usar o SALON_ID do ambiente
+    const salonId = import.meta.env.VITE_SALON_ID;
+    if (!salonId) {
+      console.error('SALON_ID not configured');
+      return { data: [], error: { message: 'Configuração não encontrada' } };
+    }
+    
     const { data: slots, error } = await supabase
       .from('slots')
       .select('*')
@@ -447,6 +429,8 @@ export const getAvailableSlots = async (date: string, duration: number = 30): Pr
       return { data: [], error };
     }
     
+    console.log('Raw slots from database:', slots);
+    
     // Transform to TimeSlot format
     const timeSlots = (slots || []).map(slot => ({
       time: slot.time_slot,
@@ -454,16 +438,22 @@ export const getAvailableSlots = async (date: string, duration: number = 30): Pr
     }));
     
     console.log('Available slots found:', timeSlots.filter(s => s.available).length);
+    console.log('All time slots:', timeSlots);
+    
     return { data: timeSlots, error: null };
   } catch (error) {
     console.error('Error in getAvailableSlots:', error);
     return { data: [], error };
   }
-}
 
 export const getAllSlots = async (date: string) => {
   try {
-    const salonId = await getSalonId();
+    const salonId = import.meta.env.VITE_SALON_ID;
+    if (!salonId) {
+      console.error('SALON_ID not configured');
+      return { data: [], error: { message: 'Configuração não encontrada' } };
+    }
+    
     const { data: slots, error } = await supabase
       .from('slots')
       .select(`
@@ -501,10 +491,14 @@ export const getAllSlots = async (date: string) => {
     console.error('Error in getAllSlots:', error);
     return { data: [], error };
   }
-}
 
 export const blockSlot = async (date: string, timeSlot: string, reason?: string) => {
-  const salonId = await getSalonId();
+  const salonId = import.meta.env.VITE_SALON_ID;
+  if (!salonId) {
+    console.error('SALON_ID not configured');
+    return { data: null, error: { message: 'Configuração não encontrada' } };
+  }
+  
   return await supabase.rpc('block_slot', {
     p_salon_id: salonId,
     slot_date: date,
@@ -514,7 +508,12 @@ export const blockSlot = async (date: string, timeSlot: string, reason?: string)
 }
 
 export const unblockSlot = async (date: string, timeSlot: string) => {
-  const salonId = await getSalonId();
+  const salonId = import.meta.env.VITE_SALON_ID;
+  if (!salonId) {
+    console.error('SALON_ID not configured');
+    return { data: null, error: { message: 'Configuração não encontrada' } };
+  }
+  
   return await supabase.rpc('unblock_slot', {
     p_salon_id: salonId,
     slot_date: date,
@@ -523,7 +522,12 @@ export const unblockSlot = async (date: string, timeSlot: string) => {
 }
 
 export const generateSlotsForPeriod = async (startDate: string, endDate: string) => {
-  const salonId = await getSalonId();
+  const salonId = import.meta.env.VITE_SALON_ID;
+  if (!salonId) {
+    console.error('SALON_ID not configured');
+    return { data: null, error: { message: 'Configuração não encontrada' } };
+  }
+  
   return await supabase.rpc('generate_slots_for_period', {
     p_salon_id: salonId,  // ou _salon
     start_date: startDate,
