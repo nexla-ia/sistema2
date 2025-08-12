@@ -48,7 +48,8 @@ export interface Customer {
 
 export interface Booking {
   id: string
-  client_id: string
+  salon_id: string
+  customer_id: string
   booking_date: string
   booking_time: string
   status: 'pending' | 'confirmed' | 'cancelled' | 'completed' | 'no_show'
@@ -57,7 +58,6 @@ export interface Booking {
   notes?: string
   created_at: string
   updated_at: string
-  client?: Customer
   customer?: Customer
   booking_services?: BookingService[]
 }
@@ -69,30 +69,6 @@ export interface BookingService {
   price: number
   created_at: string
   service?: Service
-}
-
-export interface BlockedSlot {
-  id: string
-  date: string
-  time_slot: string
-  status: 'available' | 'blocked' | 'booked'
-  booking_id?: string
-  reason?: string
-  created_at: string
-  updated_at: string
-}
-
-export interface SalonHours {
-  id: string
-  day_of_week: number // 0=domingo, 1=segunda, etc
-  is_open: boolean
-  open_time?: string
-  close_time?: string
-  break_start?: string
-  break_end?: string
-  slot_duration: number
-  created_at: string
-  updated_at: string
 }
 
 export interface Review {
@@ -112,185 +88,252 @@ export interface TimeSlot {
   available: boolean
 }
 
+export interface SlotData {
+  time_slot: string
+  status: 'available' | 'blocked' | 'booked'
+  reason?: string
+  booking_id?: string
+  bookings?: {
+    id: string
+    customer: {
+      name: string
+      phone: string
+    }
+  }
+}
+
+// Constants
+const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
+
 // Auth functions
 export const signIn = async (email: string, password: string) => {
   return await supabase.auth.signInWithPassword({ email, password })
 }
 
-// Create booking function
-export const createBooking = async (bookingData: {
-  customerName: string
-  customerPhone: string
-  customerEmail?: string
-  bookingDate: string
-  bookingTime: string
-  serviceIds: string[]
+export const signOut = async () => {
+  return await supabase.auth.signOut()
+}
+
+export const getCurrentUser = async () => {
+  const { data: { user } } = await supabase.auth.getUser()
+  return user
+}
+
+// Salon functions
+export const getSalonByUserId = async (userId: string) => {
+  return await supabase
+    .from('salons')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('active', true)
+    .single()
+}
+
+export const updateSalonOpeningHours = async (salonId: string, openingHours: any) => {
+  return await supabase
+    .from('salons')
+    .update({ opening_hours: openingHours })
+    .eq('id', salonId)
+    .select('*')
+    .single()
+}
+
+// Services functions
+export const getServices = async () => {
+  return await supabase
+    .from('services')
+    .select('*')
+    .eq('salon_id', SALON_ID)
+    .eq('active', true)
+    .order('name')
+}
+
+export const createService = async (serviceData: Omit<Service, 'id' | 'created_at' | 'updated_at'>) => {
+  return await supabase
+    .from('services')
+    .insert({
+      ...serviceData,
+      salon_id: SALON_ID
+    })
+    .select('*')
+    .single()
+}
+
+export const updateService = async (id: string, updates: Partial<Service>) => {
+  return await supabase
+    .from('services')
+    .update(updates)
+    .eq('id', id)
+    .select('*')
+    .single()
+}
+
+export const deleteService = async (id: string) => {
+  return await supabase
+    .from('services')
+    .delete()
+    .eq('id', id)
+}
+
+// Customer functions
+export const createCustomer = async (customerData: {
+  name: string
+  phone: string
+  email?: string
   notes?: string
 }) => {
+  return await supabase
+    .from('customers')
+    .insert(customerData)
+    .select('*')
+    .single()
+}
+
+export const getCustomerByPhone = async (phone: string) => {
+  return await supabase
+    .from('customers')
+    .select('*')
+    .eq('phone', phone)
+    .maybeSingle()
+}
+
+// Booking functions
+export const createBooking = async (bookingData: {
+  booking_date: string
+  booking_time: string
+  total_price: number
+  total_duration_minutes: number
+  notes?: string
+  client: {
+    name: string
+    phone: string
+    email?: string
+  }
+  services: {
+    service_id: string
+    price: number
+  }[]
+}) => {
   try {
-    const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb'
-    
-    // First, find or create customer
-    let { data: customer, error: customerError } = await supabase
-      .from('customers')
+    console.log('=== CRIANDO AGENDAMENTO ===');
+    console.log('Dados recebidos:', bookingData);
+
+    // 1. Verificar se o slot está disponível
+    const { data: existingSlot, error: slotError } = await supabase
+      .from('slots')
       .select('*')
-      .eq('phone', bookingData.customerPhone)
-      .maybeSingle()
-    
-    if (customerError && customerError.code !== 'PGRST116') {
-      return { data: null, error: customerError }
+      .eq('salon_id', SALON_ID)
+      .eq('date', bookingData.booking_date)
+      .eq('time_slot', bookingData.booking_time)
+      .maybeSingle();
+
+    if (slotError) {
+      console.error('Erro ao verificar slot:', slotError);
+      return { data: null, error: { code: 'SLOT_ERROR', message: 'Erro ao verificar disponibilidade do horário' } };
     }
+
+    if (!existingSlot) {
+      return { data: null, error: { code: 'SLOT_NOT_FOUND', message: 'Horário não encontrado' } };
+    }
+
+    if (existingSlot.status !== 'available') {
+      return { data: null, error: { code: 'SLOT_UNAVAILABLE', message: 'Este horário não está mais disponível' } };
+    }
+
+    // 2. Criar ou buscar cliente
+    let customer;
+    const { data: existingCustomer } = await getCustomerByPhone(bookingData.client.phone);
     
-    // Create customer if doesn't exist
-    if (!customer) {
-      const { data: newCustomer, error: createCustomerError } = await supabase
-        .from('customers')
-        .insert({
-          name: bookingData.customerName,
-          phone: bookingData.customerPhone,
-          email: bookingData.customerEmail
-        })
-        .select('*')
-        .single()
-      
-      if (createCustomerError) {
-        return { data: null, error: createCustomerError }
+    if (existingCustomer) {
+      customer = existingCustomer;
+      console.log('Cliente existente encontrado:', customer.id);
+    } else {
+      const { data: newCustomer, error: customerError } = await createCustomer({
+        name: bookingData.client.name,
+        phone: bookingData.client.phone,
+        email: bookingData.client.email,
+        notes: bookingData.notes
+      });
+
+      if (customerError) {
+        console.error('Erro ao criar cliente:', customerError);
+        return { data: null, error: { code: 'CUSTOMER_ERROR', message: 'Erro ao criar dados do cliente' } };
       }
-      
-      customer = newCustomer
+
+      customer = newCustomer;
+      console.log('Novo cliente criado:', customer.id);
     }
-    
-    // Get services to calculate total price and duration
-    const { data: services, error: servicesError } = await supabase
-      .from('services')
-      .select('*')
-      .in('id', bookingData.serviceIds)
-    
-    if (servicesError) {
-      return { data: null, error: servicesError }
-    }
-    
-    if (!services || services.length === 0) {
-      return { data: null, error: { message: 'No services found' } }
-    }
-    
-    const totalPrice = services.reduce((sum, service) => sum + Number(service.price), 0)
-    const totalDuration = services.reduce((sum, service) => sum + service.duration_minutes, 0)
-    
-    // Create booking
+
+    // 3. Criar agendamento
     const { data: booking, error: bookingError } = await supabase
       .from('bookings')
       .insert({
         salon_id: SALON_ID,
         customer_id: customer.id,
-        booking_date: bookingData.bookingDate,
-        booking_time: bookingData.bookingTime,
+        booking_date: bookingData.booking_date,
+        booking_time: bookingData.booking_time,
         status: 'pending',
-        total_price: totalPrice,
-        total_duration_minutes: totalDuration,
+        total_price: bookingData.total_price,
+        total_duration_minutes: bookingData.total_duration_minutes,
         notes: bookingData.notes
       })
       .select('*')
-      .single()
-    
+      .single();
+
     if (bookingError) {
-      return { data: null, error: bookingError }
+      console.error('Erro ao criar agendamento:', bookingError);
+      return { data: null, error: { code: 'BOOKING_ERROR', message: 'Erro ao criar agendamento' } };
     }
-    
-    // Create booking services
-    const bookingServices = services.map(service => ({
+
+    console.log('Agendamento criado:', booking.id);
+
+    // 4. Criar serviços do agendamento
+    const bookingServices = bookingData.services.map(service => ({
       booking_id: booking.id,
-      service_id: service.id,
-      price: Number(service.price)
-    }))
-    
-    const { error: bookingServicesError } = await supabase
+      service_id: service.service_id,
+      price: service.price
+    }));
+
+    const { error: servicesError } = await supabase
       .from('booking_services')
-      .insert(bookingServices)
-    
-    if (bookingServicesError) {
-      return { data: null, error: bookingServicesError }
+      .insert(bookingServices);
+
+    if (servicesError) {
+      console.error('Erro ao criar serviços do agendamento:', servicesError);
+      // Tentar reverter o agendamento
+      await supabase.from('bookings').delete().eq('id', booking.id);
+      return { data: null, error: { code: 'SERVICES_ERROR', message: 'Erro ao vincular serviços ao agendamento' } };
     }
-    
-    return { data: booking, error: null }
-    
+
+    console.log('Serviços vinculados ao agendamento');
+
+    // 5. Marcar slot como agendado
+    const { error: updateSlotError } = await supabase
+      .from('slots')
+      .update({
+        status: 'booked',
+        booking_id: booking.id
+      })
+      .eq('salon_id', SALON_ID)
+      .eq('date', bookingData.booking_date)
+      .eq('time_slot', bookingData.booking_time);
+
+    if (updateSlotError) {
+      console.error('Erro ao atualizar slot:', updateSlotError);
+      // Não reverter aqui pois o agendamento foi criado com sucesso
+    }
+
+    console.log('Slot marcado como agendado');
+    console.log('=== AGENDAMENTO CRIADO COM SUCESSO ===');
+
+    return { data: booking, error: null };
+
   } catch (error) {
-    return { data: null, error }
+    console.error('Erro geral ao criar agendamento:', error);
+    return { data: null, error: { code: 'GENERAL_ERROR', message: 'Erro interno do servidor' } };
   }
 }
 
-// Função para gerar slots para a visão administrativa
-const generateAdminSlotsFromWorkingHours = async (date: string) => {
-  try {
-    const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
-    
-    // Obter o dia da semana (0 = domingo, 1 = segunda, etc.)
-    const dateObj = new Date(date + 'T12:00:00');
-    const dayOfWeek = dateObj.getDay();
-    
-    // Buscar horários de funcionamento para este dia
-    const { data: workingHours, error } = await supabase
-      .from('working_hours')
-      .select('*')
-      .eq('salon_id', SALON_ID)
-      .eq('day_of_week', dayOfWeek)
-      .maybeSingle();
-    
-    if (error) {
-      console.error('Error fetching working hours for admin:', error);
-      return [];
-    }
-    
-    if (!workingHours || !workingHours.is_open) {
-      console.log('Salon is closed on this day (admin view)');
-      return [];
-    }
-    
-    const slots = [];
-    const slotDuration = workingHours.slot_duration || 30;
-    
-    // Converter horários para minutos
-    const timeToMinutes = (timeStr: string): number => {
-      const [hours, minutes] = timeStr.split(':').map(Number);
-      return hours * 60 + minutes;
-    };
-    
-    const minutesToTime = (minutes: number): string => {
-      const hours = Math.floor(minutes / 60);
-      const mins = minutes % 60;
-      return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
-    };
-    
-    const openTime = timeToMinutes(workingHours.open_time);
-    const closeTime = timeToMinutes(workingHours.close_time);
-    const breakStart = workingHours.break_start ? timeToMinutes(workingHours.break_start) : null;
-    const breakEnd = workingHours.break_end ? timeToMinutes(workingHours.break_end) : null;
-    
-    // Gerar slots para visão administrativa
-    for (let currentTime = openTime; currentTime < closeTime; currentTime += slotDuration) {
-      // Pular horário de intervalo se definido
-      if (breakStart && breakEnd && currentTime >= breakStart && currentTime < breakEnd) {
-        continue;
-      }
-      
-      const timeStr = minutesToTime(currentTime);
-      
-      slots.push({
-        time_slot: timeStr,
-        status: 'available',
-        reason: null,
-        booking_id: null,
-        bookings: undefined
-      });
-    }
-    
-    return slots;
-    
-  } catch (error) {
-    console.error('Error generating admin slots from working hours:', error);
-    return [];
-  }
-};
 export const getBookings = async (date?: string) => {
   let query = supabase
     .from('bookings')
@@ -302,6 +345,7 @@ export const getBookings = async (date?: string) => {
         service:services(*)
       )
     `)
+    .eq('salon_id', SALON_ID)
     .order('booking_date', { ascending: true })
     .order('booking_time', { ascending: true })
 
@@ -321,30 +365,6 @@ export const updateBookingStatus = async (id: string, status: Booking['status'])
     .single()
 }
 
-// Salon Hours functions
-export const getSalonHours = async () => {
-  const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
-  
-  return await supabase
-    .from('working_hours')
-    .select('*')
-    .eq('salon_id', SALON_ID)
-    .order('day_of_week');
-}
-
-export const updateSalonHours = async (dayOfWeek: number, updates: Partial<SalonHours>) => {
-  const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
-  
-  return await supabase
-    .from('working_hours')
-    .update(updates)
-    .eq('salon_id', SALON_ID)
-    .eq('day_of_week', dayOfWeek)
-    .select('*')
-    .single();
-}
-
-
 // Slots functions
 export const getAvailableSlots = async (date: string, duration: number = 30): Promise<{ data: TimeSlot[] | null; error: any }> => {
   try {
@@ -352,11 +372,6 @@ export const getAvailableSlots = async (date: string, duration: number = 30): Pr
     console.log('Date:', date);
     console.log('Duration:', duration);
     
-    console.log('Fetching available slots for date:', date, 'duration:', duration);
-    
-    const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
-    
-    console.log('Fetching slots from database...');
     const { data: slots, error } = await supabase
       .from('slots')
       .select('*')
@@ -377,7 +392,7 @@ export const getAvailableSlots = async (date: string, duration: number = 30): Pr
     }
     
     // Transform to TimeSlot format
-    const timeSlots = (slots || []).map(slot => ({
+    const timeSlots = slots.map(slot => ({
       time: slot.time_slot,
       available: slot.status === 'available'
     }));
@@ -392,153 +407,7 @@ export const getAvailableSlots = async (date: string, duration: number = 30): Pr
   }
 }
 
-// Função para gerar slots baseado nos horários de funcionamento
-const generateSlotsFromWorkingHours = async (date: string): Promise<TimeSlot[]> => {
-  try {
-    console.log('=== DEBUG generateSlotsFromWorkingHours ===');
-    console.log('Input date:', date);
-    
-    const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
-    
-    // Obter o dia da semana (0 = domingo, 1 = segunda, etc.)
-    const dateObj = new Date(date + 'T12:00:00');
-    const dayOfWeek = dateObj.getDay();
-    
-    console.log('Day of week:', dayOfWeek, '(0=Sunday, 1=Monday, etc.)');
-    
-    // Buscar horários de funcionamento para este dia
-    console.log('Fetching working hours for salon:', SALON_ID, 'day:', dayOfWeek);
-    const { data: workingHours, error } = await supabase
-      .from('working_hours')
-      .select('*')
-      .eq('salon_id', SALON_ID)
-      .eq('day_of_week', dayOfWeek)
-      .maybeSingle();
-    
-    if (error) {
-      console.error('Error fetching working hours:', error);
-      // Se há erro, usar horários padrão
-      console.log('Using default working hours due to error');
-      return generateDefaultWorkingHours(dayOfWeek);
-    }
-    
-    console.log('Working hours result:', workingHours);
-    
-    if (!workingHours || !workingHours.is_open) {
-      console.log('Salon is closed on this day. Working hours:', workingHours);
-      // Se não há working_hours ou está fechado, usar horários padrão
-      console.log('Using default working hours - salon appears closed or no data');
-      return generateDefaultWorkingHours(dayOfWeek);
-    }
-    
-    console.log('Salon is open! Working hours:', {
-      open_time: workingHours.open_time,
-      close_time: workingHours.close_time,
-      break_start: workingHours.break_start,
-      break_end: workingHours.break_end,
-      slot_duration: workingHours.slot_duration
-    });
-    
-    const slots: TimeSlot[] = [];
-    const slotDuration = workingHours.slot_duration || 30;
-    console.log('Using slot duration:', slotDuration, 'minutes');
-    
-    // Converter horários para minutos para facilitar cálculos
-    const timeToMinutes = (timeStr: string): number => {
-      const [hours, minutes] = timeStr.split(':').map(Number);
-      return hours * 60 + minutes;
-    };
-    
-    const minutesToTime = (minutes: number): string => {
-      const hours = Math.floor(minutes / 60);
-      const mins = minutes % 60;
-      return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
-    };
-    
-    const openTime = timeToMinutes(workingHours.open_time);
-    const closeTime = timeToMinutes(workingHours.close_time);
-    const breakStart = workingHours.break_start ? timeToMinutes(workingHours.break_start) : null;
-    const breakEnd = workingHours.break_end ? timeToMinutes(workingHours.break_end) : null;
-    
-    console.log('Time calculations:', {
-      openTime: openTime + ' minutes (' + workingHours.open_time + ')',
-      closeTime: closeTime + ' minutes (' + workingHours.close_time + ')',
-      breakStart: breakStart ? breakStart + ' minutes (' + workingHours.break_start + ')' : 'none',
-      breakEnd: breakEnd ? breakEnd + ' minutes (' + workingHours.break_end + ')' : 'none'
-    });
-    
-    // Gerar slots do horário de abertura até o fechamento
-    console.log('Generating slots from', openTime, 'to', closeTime, 'with', slotDuration, 'minute intervals');
-    for (let currentTime = openTime; currentTime < closeTime; currentTime += slotDuration) {
-      // Pular horário de intervalo se definido
-      if (breakStart && breakEnd && currentTime >= breakStart && currentTime < breakEnd) {
-        console.log('Skipping break time:', minutesToTime(currentTime));
-        continue;
-      }
-      
-      const timeStr = minutesToTime(currentTime);
-      console.log('Adding slot:', timeStr);
-      
-      // Simular alguns slots como indisponíveis (30% de chance)
-      const available = Math.random() > 0.3;
-      
-      slots.push({
-        time: timeStr,
-        available: true // Todos disponíveis por padrão
-      });
-    }
-    
-    console.log('Final generated slots:', slots.length, 'slots');
-    console.log('Slots list:', slots.map(s => s.time + ' (' + (s.available ? 'available' : 'unavailable') + ')'));
-    return slots;
-    
-  } catch (error) {
-    console.error('Error generating slots from working hours:', error);
-    // Em caso de erro, usar horários padrão
-    const dateObj = new Date(date + 'T12:00:00');
-    const dayOfWeek = dateObj.getDay();
-    return generateDefaultWorkingHours(dayOfWeek);
-  }
-};
-// Função para gerar horários padrão quando não há working_hours
-const generateDefaultWorkingHours = (dayOfWeek: number): TimeSlot[] => {
-  console.log('=== GENERATING DEFAULT WORKING HOURS ===');
-  console.log('Day of week:', dayOfWeek);
-  
-  // Domingo fechado
-  if (dayOfWeek === 0) {
-    console.log('Sunday - closed');
-    return [];
-  }
-  
-  // Segunda a sábado: 8:00 às 18:00, slots de 30 minutos
-  const slots: TimeSlot[] = [];
-  for (let hour = 8; hour < 18; hour++) {
-    for (let minute = 0; minute < 60; minute += 30) {
-      const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
-      slots.push({
-        time: timeStr,
-        available: true
-      });
-    }
-  }
-}
-// Services functions
-export const getServices = async () => {
-  const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
-  
-  return await supabase
-    .from('services')
-    .select('*')
-    .eq('salon_id', SALON_ID)
-    .eq('active', true)
-    .order('name');
-}
-
-// Get all slots for admin dashboard
 export const getAllSlots = async (date: string) => {
-  const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
-  
   return await supabase
     .from('slots')
     .select(`
@@ -552,4 +421,98 @@ export const getAllSlots = async (date: string) => {
     .eq('date', date)
     .order('time_slot');
 }
+
+export const saveBlockedSlots = async (date: string, blockedSlots: string[]) => {
+  try {
+    // Primeiro, desbloquear todos os slots do dia
+    await supabase
+      .from('slots')
+      .update({ 
+        status: 'available',
+        blocked_reason: null 
+      })
+      .eq('salon_id', SALON_ID)
+      .eq('date', date)
+      .eq('status', 'blocked');
+
+    // Depois, bloquear os slots selecionados
+    if (blockedSlots.length > 0) {
+      const updates = blockedSlots.map(timeSlot => ({
+        salon_id: SALON_ID,
+        date,
+        time_slot: timeSlot,
+        status: 'blocked',
+        blocked_reason: 'Bloqueado manualmente'
+      }));
+
+      // Usar upsert para atualizar ou inserir
+      const { error } = await supabase
+        .from('slots')
+        .upsert(updates, { 
+          onConflict: 'salon_id,date,time_slot',
+          ignoreDuplicates: false 
+        });
+
+      if (error) throw error;
+    }
+
+    return { error: null };
+  } catch (error) {
+    console.error('Error saving blocked slots:', error);
+    return { error };
+  }
+}
+
+// Reviews functions
+export const getReviews = async () => {
+  return await supabase
+    .from('reviews')
+    .select('*')
+    .eq('salon_id', SALON_ID)
+    .eq('approved', true)
+    .order('created_at', { ascending: false })
+}
+
+export const getAllReviews = async () => {
+  return await supabase
+    .from('reviews')
+    .select('*')
+    .eq('salon_id', SALON_ID)
+    .order('created_at', { ascending: false })
+}
+
+export const createReview = async (reviewData: {
+  customer_name: string
+  rating: number
+  comment: string
+}) => {
+  // Usar o telefone como identificador único (simulado)
+  const customer_identifier = `${reviewData.customer_name.toLowerCase().replace(/\s+/g, '')}_${Date.now()}`;
   
+  return await supabase
+    .from('reviews')
+    .insert({
+      salon_id: SALON_ID,
+      customer_name: reviewData.customer_name,
+      customer_identifier,
+      rating: reviewData.rating,
+      comment: reviewData.comment,
+      approved: true // Auto-aprovar por enquanto
+    })
+    .select('*')
+    .single()
+}
+
+export const approveReview = async (reviewId: string) => {
+  return await supabase
+    .from('reviews')
+    .update({ approved: true })
+    .eq('id', reviewId)
+}
+
+export const deleteReview = async (reviewId: string) => {
+  return await supabase
+    .from('reviews')
+    .delete()
+    .eq('id', reviewId)
+}
