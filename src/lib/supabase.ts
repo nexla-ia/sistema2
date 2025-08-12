@@ -203,6 +203,41 @@ const ScheduleManager = ({ salon }: ScheduleManagerProps) => {
     }
   };
 
+  const generateSlotsWithSavedConfig = async (salonId: string, startDate: string, endDate: string) => {
+    try {
+      console.log('=== GERANDO SLOTS COM CONFIGURAÇÃO SALVA ===');
+      
+      // Buscar configuração salva
+      const { data: schedule, error: scheduleError } = await getDefaultSchedule(salonId);
+      
+      if (scheduleError) {
+        throw new Error('Erro ao buscar configuração: ' + scheduleError.message);
+      }
+      
+      console.log('Configuração encontrada:', schedule);
+      
+      // Gerar slots usando a função RPC
+      const { error } = await supabase.rpc('generate_slots_for_period', {
+        p_salon_id: salonId,
+        p_start_date: startDate,
+        p_end_date: endDate,
+        p_open_time: schedule.open_time,
+        p_close_time: schedule.close_time,
+        p_slot_duration: schedule.slot_duration,
+        p_break_start: schedule.break_start || null,
+        p_break_end: schedule.break_end || null
+      });
+      
+      if (error) throw error;
+      
+      console.log('Slots gerados com sucesso');
+      return { error: null };
+    } catch (error) {
+      console.error('Error generating slots with saved config:', error);
+      return { error };
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-8">
@@ -242,39 +277,6 @@ const ScheduleManager = ({ salon }: ScheduleManagerProps) => {
         
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
           <div>
-  try {
-    console.log('=== GERANDO SLOTS COM CONFIGURAÇÃO SALVA ===');
-    
-    // Buscar configuração salva
-    const { data: schedule, error: scheduleError } = await getDefaultSchedule(salonId);
-    
-    if (scheduleError) {
-      throw new Error('Erro ao buscar configuração: ' + scheduleError.message);
-    }
-    
-    console.log('Configuração encontrada:', schedule);
-    
-    // Gerar slots usando a função RPC
-    const { error } = await supabase.rpc('generate_slots_for_period', {
-      p_salon_id: salonId,
-      p_start_date: startDate,
-      p_end_date: endDate,
-      p_open_time: schedule.open_time,
-      p_close_time: schedule.close_time,
-      p_slot_duration: schedule.slot_duration,
-      p_break_start: schedule.break_start || null,
-      p_break_end: schedule.break_end || null
-    });
-    
-    if (error) throw error;
-    
-    console.log('Slots gerados com sucesso');
-    return { error: null };
-  } catch (error) {
-    console.error('Error generating slots with saved config:', error);
-    return { error };
-  }
-}
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Horário de Abertura
             </label>
