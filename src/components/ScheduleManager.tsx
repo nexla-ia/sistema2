@@ -5,6 +5,9 @@ import { useModal } from '../hooks/useModal';
 import { 
   getAllSlots, 
   supabase,
+  getDefaultSchedule,
+  saveDefaultSchedule,
+  generateSlotsWithSavedConfig,
   type Salon 
 } from '../lib/supabase';
 
@@ -58,8 +61,49 @@ const ScheduleManager = ({ salon }: ScheduleManagerProps) => {
 
   const { modal, hideModal, showSuccess, showError } = useModal();
 
+  // Carregar configuração padrão salva
+  const loadDefaultSchedule = async () => {
+    try {
+      console.log('=== CARREGANDO CONFIGURAÇÃO PADRÃO ===');
+      const { data: schedule, error } = await getDefaultSchedule();
+      
+      if (error) {
+        console.error('Erro ao carregar configuração:', error);
+        return;
+      }
+      
+      console.log('Configuração carregada:', schedule);
+      setDefaultSchedule(schedule);
+    } catch (error) {
+      console.error('Error loading default schedule:', error);
+    }
+  };
+
+  // Salvar configuração padrão
+  const handleSaveDefaultSchedule = async () => {
+    try {
+      console.log('=== SALVANDO CONFIGURAÇÃO ===');
+      const { error } = await saveDefaultSchedule(defaultSchedule);
+      
+      if (error) {
+        console.error('Erro ao salvar:', error);
+        showError('Erro', 'Erro ao salvar configuração padrão');
+        return;
+      }
+      
+      showSuccess(
+        'Configuração Salva!', 
+        'Horário padrão salvo com sucesso. Esta configuração será usada para gerar novos slots.'
+      );
+    } catch (error) {
+      console.error('Error saving default schedule:', error);
+      showError('Erro', 'Erro ao salvar configuração');
+    }
+  };
+
   useEffect(() => {
     loadSlots();
+    loadDefaultSchedule();
     setLoading(false);
   }, [selectedDate]);
 
@@ -77,26 +121,30 @@ const ScheduleManager = ({ salon }: ScheduleManagerProps) => {
   const generateSlots = async () => {
     setGenerating(true);
     try {
-      const SALON_ID = '4f59cc12-91c1-44fc-b158-697b9056e0cb';
+      console.log('=== GERANDO SLOTS ===');
+      console.log('Período:', generatePeriod);
+      console.log('Configuração atual:', defaultSchedule);
       
-      // Chamar função RPC para gerar slots
-      const { error } = await supabase.rpc('generate_slots_for_period', {
-        p_salon_id: SALON_ID,
-        p_start_date: generatePeriod.start_date,
-        p_end_date: generatePeriod.end_date,
-        p_open_time: defaultSchedule.open_time,
-        p_close_time: defaultSchedule.close_time,
-        p_slot_duration: defaultSchedule.slot_duration,
-        p_break_start: defaultSchedule.break_start || null,
-        p_break_end: defaultSchedule.break_end || null
-      });
+      // Primeiro salvar a configuração atual
+      const { error: saveError } = await saveDefaultSchedule(defaultSchedule);
+      if (saveError) {
+        console.error('Erro ao salvar configuração:', saveError);
+        showError('Erro', 'Erro ao salvar configuração antes de gerar slots');
+        return;
+      }
+      
+      // Gerar slots usando configuração salva
+      const { error } = await generateSlotsWithSavedConfig(
+        generatePeriod.start_date,
+        generatePeriod.end_date
+      );
 
       if (error) throw error;
 
       await loadSlots();
       showSuccess(
         'Horários Gerados!', 
-        `Slots criados de ${generatePeriod.start_date} até ${generatePeriod.end_date} com sucesso!`
+        `Slots criados de ${generatePeriod.start_date} até ${generatePeriod.end_date} com sucesso! Configuração padrão também foi salva.`
       );
     } catch (error: any) {
       console.error('Error generating slots:', error);
@@ -259,6 +307,20 @@ const ScheduleManager = ({ salon }: ScheduleManagerProps) => {
         {/* Período de Geração */}
         <div className="border-t pt-6">
           <h4 className="text-md font-semibold text-gray-900 mb-4">Gerar Horários para Período</h4>
+          
+          <div className="mb-4">
+            <button
+              onClick={handleSaveDefaultSchedule}
+              className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 transition-colors flex items-center space-x-2"
+            >
+              <Save className="w-4 h-4" />
+              <span>Salvar Configuração Padrão</span>
+            </button>
+            <p className="text-xs text-gray-500 mt-1">
+              Salve a configuração antes de gerar os horários
+            </p>
+          </div>
+          
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -307,11 +369,14 @@ const ScheduleManager = ({ salon }: ScheduleManagerProps) => {
           
           <div className="mt-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
             <p className="text-sm text-blue-800">
-              <strong>Preview:</strong> Será gerado de {defaultSchedule.open_time} às {defaultSchedule.close_time}, 
+              <strong>Configuração Atual:</strong> De {defaultSchedule.open_time} às {defaultSchedule.close_time}, 
               slots de {defaultSchedule.slot_duration}min
               {defaultSchedule.break_start && defaultSchedule.break_end && 
                 `, com intervalo de ${defaultSchedule.break_start} às ${defaultSchedule.break_end}`
               }
+            </p>
+            <p className="text-xs text-blue-600 mt-2">
+              💡 Esta configuração será salva automaticamente ao gerar os horários
             </p>
           </div>
         </div>
