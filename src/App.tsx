@@ -47,9 +47,17 @@ function App() {
 
   const loadInitialData = async () => {
     try {
+      console.log('=== CARREGANDO DADOS INICIAIS ===');
+      
       const { data: servicesData } = await getServices();
+      console.log('Serviços carregados:', servicesData);
+      
       if (servicesData) {
         setServices(servicesData);
+        console.log('Serviços definidos no estado:', servicesData.length);
+      } else {
+        console.warn('Nenhum serviço encontrado');
+        setServices([]);
       }
 
       const user = await getCurrentUser();
@@ -99,6 +107,7 @@ function App() {
     } catch (error) {
       console.error('Error loading initial data:', error);
       // Em caso de erro, usar dados padrão para não quebrar a aplicação
+      setServices([]);
       setSalon({
         id: crypto.randomUUID(),
         user_id: undefined,

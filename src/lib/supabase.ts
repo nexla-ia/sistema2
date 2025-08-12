@@ -140,12 +140,14 @@ export const updateSalonOpeningHours = async (salonId: string, openingHours: any
 
 // Services functions
 export const getServices = async () => {
+  console.log('=== BUSCANDO SERVIÇOS ===');
+  console.log('SALON_ID:', SALON_ID);
+  
+  const { data, error } = await supabase
   return await supabase
     .from('services')
     .select('*')
-    .eq('salon_id', SALON_ID)
     .eq('active', true)
-    .order('name')
 }
 
 export const createService = async (serviceData: Omit<Service, 'id' | 'created_at' | 'updated_at'>) => {
